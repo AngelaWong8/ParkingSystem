@@ -36,13 +36,13 @@ public class ParkingSpotDAO {
              ResultSet rs = stmt.executeQuery(checkSql)) {
 
             if (rs.next() && rs.getInt(1) == 0) {
-                System.out.println("Generating 5 Floors x 3 Rows x 10 Spots...");
+                System.out.println("Generating 3 Floors x 3 Rows x 10 Spots...");
 
                 PreparedStatement pstmt = conn.prepareStatement(insertSql);
                 int globalId = 1;
 
-                // 5 Floors
-                for (int f = 1; f <= 5; f++) {
+                // 3 Floors
+                for (int f = 1; f <= 3; f++) {
                     // 3 Rows per floor
                     for (int r = 1; r <= 3; r++) {
                         // 10 Spots per row
