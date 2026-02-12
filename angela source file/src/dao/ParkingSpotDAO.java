@@ -102,7 +102,7 @@ public class ParkingSpotDAO {
         return spots;
     }
 
-    // Person A provides the "Update Tool" for the team
+    // Update status method for parking spot and updates to parking_lot.db
     public void updateSpotStatus(int id, boolean occupied) {
     String sql = "UPDATE parking_spots SET is_occupied = ? WHERE id = ?";
     
