@@ -101,4 +101,21 @@ public class ParkingSpotDAO {
         }
         return spots;
     }
+
+    // Person A provides the "Update Tool" for the team
+    public void updateSpotStatus(int id, boolean occupied) {
+    String sql = "UPDATE parking_spots SET is_occupied = ? WHERE id = ?";
+    
+    try (Connection conn = DatabaseConnection.connect();
+         PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        
+        pstmt.setInt(1, occupied ? 1 : 0); // 1 for occupied, 0 for empty
+        pstmt.setInt(2, id);
+        pstmt.executeUpdate();
+        
+        System.out.println("Spot " + id + " status updated in DB.");
+    } catch (SQLException e) {
+        System.out.println("Error updating status: " + e.getMessage());
+    }
+}
 }
