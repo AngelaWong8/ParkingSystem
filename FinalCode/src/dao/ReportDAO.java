@@ -2,43 +2,55 @@ package dao;
 
 import database.DatabaseConnection;
 import java.sql.*;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class ReportDAO {
 
+    private static final Logger LOGGER = Logger.getLogger(ReportDAO.class.getName());
+
     public double getTotalRevenueToday() throws SQLException {
-        String sql = "SELECT SUM(amount_paid) FROM payments WHERE date(payment_time) = date('now')";
+        // Get today's date
+        String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+
+        // Sum ONLY parking fee payments (not fines)
+        String sql = "SELECT SUM(amount_paid) FROM payments WHERE date(payment_time) = ? " +
+                "AND (payment_method = 'Cash' OR payment_method = 'Card' OR payment_method = 'Cash (FREE)')";
 
         try (Connection conn = DatabaseConnection.connect();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-            if (rs.next()) {
-                return rs.getDouble(1);
-            }
-        } catch (SQLException e) {
-            // Table doesn't exist yet (Person C not done)
-            return 0;
+            pstmt.setString(1, today);
+            ResultSet rs = pstmt.executeQuery();
+
+            double result = rs.next() ? rs.getDouble(1) : 0.0;
+            LOGGER.info("Total parking revenue today: RM " + result);
+            return result;
         }
-        return 0;
     }
 
     public double getTotalFinesToday() throws SQLException {
-        String sql = "SELECT SUM(fine_amount) FROM fines WHERE is_paid = 1";
+        // Get today's date
+        String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+
+        // Sum ONLY fine payments
+        String sql = "SELECT SUM(amount_paid) FROM payments WHERE date(payment_time) = ? " +
+                "AND payment_method LIKE '%FINE%'";
 
         try (Connection conn = DatabaseConnection.connect();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-            if (rs.next()) {
-                return rs.getDouble(1);
-            }
-        } catch (SQLException e) {
-            // Table doesn't exist yet (Person C not done)
-            return 0;
+            pstmt.setString(1, today);
+            ResultSet rs = pstmt.executeQuery();
+
+            double result = rs.next() ? rs.getDouble(1) : 0.0;
+            LOGGER.info("Total fines paid today: RM " + result);
+            return result;
         }
-        return 0;
     }
 
     public List<Object[]> getHourlyOccupancy() throws SQLException {
@@ -53,6 +65,8 @@ public class ReportDAO {
             while (rs.next()) {
                 data.add(new Object[]{rs.getString("hour"), rs.getInt("count")});
             }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "Error getting hourly occupancy", e);
         }
         return data;
     }
@@ -65,7 +79,7 @@ public class ReportDAO {
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
             pstmt.setDouble(1, getTotalRevenueToday());
-            pstmt.setDouble(2, getTotalFinesToday()); //Person C
+            pstmt.setDouble(2, getTotalFinesToday());
             pstmt.setInt(3, getCurrentVehicleCount());
             pstmt.executeUpdate();
         }
@@ -83,5 +97,44 @@ public class ReportDAO {
             }
         }
         return 0;
+    }
+
+    public double getReservationFinesToday() throws SQLException {
+        String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+        String sql = "SELECT SUM(amount_paid) FROM payments WHERE date(payment_time) = ? " +
+                "AND payment_method LIKE '%RESERVATION%'";
+
+        try (Connection conn = DatabaseConnection.connect();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, today);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next() ? rs.getDouble(1) : 0.0;
+        }
+    }
+
+    public double getOverstayFinesToday() throws SQLException {
+        String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+        String sql = "SELECT SUM(amount_paid) FROM payments WHERE date(payment_time) = ? " +
+                "AND payment_method LIKE '%OVERSTAY%'";
+
+        try (Connection conn = DatabaseConnection.connect();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, today);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next() ? rs.getDouble(1) : 0.0;
+        }
+    }
+
+    public double getParkingRevenueToday() throws SQLException {
+        String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+        String sql = "SELECT SUM(amount_paid) FROM payments WHERE date(payment_time) = ? " +
+                "AND (payment_method = 'Cash' OR payment_method = 'Card')";
+
+        try (Connection conn = DatabaseConnection.connect();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, today);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next() ? rs.getDouble(1) : 0.0;
+        }
     }
 }
