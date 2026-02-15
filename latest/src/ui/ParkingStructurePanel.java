@@ -17,15 +17,35 @@ public class ParkingStructurePanel extends JPanel {
         this.facade = facade;
         this.setLayout(new BorderLayout());
 
+        // Register for refresh notifications (this keeps auto-refresh working)
+        facade.addRefreshListener(this::refreshDisplay);
+
         JPanel topContainer = new JPanel(new BorderLayout());
         topContainer.add(createLegendPanel(), BorderLayout.NORTH);
-        topContainer.add(createNotePanel(), BorderLayout.SOUTH);
+        topContainer.add(createNotePanel(), BorderLayout.CENTER);
+        topContainer.add(createRefreshButtonPanel(), BorderLayout.SOUTH); // Added this
         add(topContainer, BorderLayout.NORTH);
 
         tabbedPane = new JTabbedPane();
         add(tabbedPane, BorderLayout.CENTER);
 
         loadSpots();
+    }
+
+    public void refreshDisplay() {
+        loadSpots();
+    }
+
+    private JPanel createRefreshButtonPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        panel.setBackground(new Color(240, 240, 240));
+
+        JButton refreshBtn = new JButton("🔄 Refresh Display");
+        refreshBtn.setFont(new Font("SansSerif", Font.BOLD, 12));
+        refreshBtn.addActionListener(e -> refreshDisplay());
+
+        panel.add(refreshBtn);
+        return panel;
     }
 
     private JPanel createLegendPanel() {
