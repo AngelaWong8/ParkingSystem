@@ -47,10 +47,10 @@ public class DatabaseConnection {
                     "license_plate TEXT NOT NULL, " +
                     "spot_id TEXT NOT NULL, " +
                     "entry_time TEXT NOT NULL, " +
+                    "is_fully_paid INTEGER DEFAULT 0, " +  // NEW COLUMN
                     "FOREIGN KEY (license_plate) REFERENCES vehicles(license_plate))");
 
-            // Person C: payments & fines (commented out until Person C delivers)
-
+            // Person C: payments & fines
             stmt.execute("CREATE TABLE IF NOT EXISTS payments (" +
                     "payment_id TEXT PRIMARY KEY, " +
                     "ticket_id TEXT NOT NULL, " +
@@ -65,9 +65,12 @@ public class DatabaseConnection {
                     "ticket_id TEXT NOT NULL, " +
                     "license_plate TEXT NOT NULL, " +
                     "fine_amount REAL NOT NULL, " +
+                    "original_amount REAL NOT NULL, " +  // NEW: original parking fee
+                    "paid_amount REAL DEFAULT 0, " +      // NEW: what they've paid
                     "overstay_minutes INTEGER NOT NULL, " +
                     "calculation_method TEXT NOT NULL, " +
                     "is_paid INTEGER DEFAULT 0, " +
+                    "created_date TEXT NOT NULL, " +      // NEW: when fine was created
                     "FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id))");
 
             // Person D: daily_revenue
@@ -76,6 +79,10 @@ public class DatabaseConnection {
                     "total_payments REAL DEFAULT 0, " +
                     "total_fines REAL DEFAULT 0, " +
                     "total_vehicles INTEGER DEFAULT 0)");
+
+            stmt.execute("CREATE TABLE IF NOT EXISTS settings (" +
+                    "key TEXT PRIMARY KEY, " +
+                    "value TEXT NOT NULL)");
 
             System.out.println("Database tables created/verified.");
 
