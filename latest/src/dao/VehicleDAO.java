@@ -13,7 +13,7 @@ public class VehicleDAO {
 
         try (Connection conn = DatabaseConnection.connect();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, vehicle.getLicensePlate());
+            pstmt.setString(1, vehicle.getLicensePlate().toUpperCase());
             pstmt.setString(2, vehicle.getVehicleType());
 
             if (vehicle instanceof HandicappedVehicle) {
@@ -31,18 +31,19 @@ public class VehicleDAO {
 
         try (Connection conn = DatabaseConnection.connect();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, licensePlate);
+            pstmt.setString(1, licensePlate.toUpperCase());
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
                     String type = rs.getString("vehicle_type");
                     boolean hasCard = rs.getInt("has_handicapped_card") == 1;
+                    String plate = rs.getString("license_plate");
 
                     switch (type) {
-                        case "CAR": return new Car(licensePlate);
-                        case "MOTORCYCLE": return new Motorcycle(licensePlate);
-                        case "SUV": return new SUV(licensePlate);
-                        case "HANDICAPPED": return new HandicappedVehicle(licensePlate, hasCard);
+                        case "CAR": return new Car(plate);
+                        case "MOTORCYCLE": return new Motorcycle(plate);
+                        case "SUV": return new SUV(plate);
+                        case "HANDICAPPED": return new HandicappedVehicle(plate, hasCard);
                         default: return null;
                     }
                 }
