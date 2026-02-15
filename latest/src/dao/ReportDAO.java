@@ -65,7 +65,7 @@ public class ReportDAO {
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
             pstmt.setDouble(1, getTotalRevenueToday());
-            pstmt.setDouble(2, 0); // getTotalFinesToday() - commented until Person C
+            pstmt.setDouble(2, getTotalFinesToday()); //Person C
             pstmt.setInt(3, getCurrentVehicleCount());
             pstmt.executeUpdate();
         }
