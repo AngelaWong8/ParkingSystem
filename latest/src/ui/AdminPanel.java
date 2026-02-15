@@ -1,22 +1,39 @@
 package ui;
 
 import facade.ParkingSystemFacade;
+import model.*;
+import dao.*;
+import database.DatabaseConnection;
+
 import javax.swing.*;
 import javax.swing.border.TitledBorder;
 import java.awt.*;
-import java.sql.SQLException;
+import java.sql.*;
+import java.util.List;
 
 public class AdminPanel extends JPanel {
 
     private ParkingSystemFacade facade;
+
+    // Stats Labels
     private JLabel totalSpotsLabel;
     private JLabel occupiedLabel;
     private JLabel availableLabel;
     private JLabel occupancyRateLabel;
     private JLabel todayRevenueLabel;
     private JLabel todayFinesLabel;
-    private JTextArea systemLogArea;
-    private Timer refreshTimer;
+
+    // Vehicle & Fines Display
+    private JTextArea currentVehiclesArea;
+    private JTextArea unpaidFinesArea;
+
+    // Fine Scheme Selection
+    private JComboBox<String> fineSchemeCombo;
+    private JButton applySchemeBtn;
+
+    // Test Mode
+    private JCheckBox testModeCheckBox;
+    private JSpinner testHoursSpinner;
 
     public AdminPanel(ParkingSystemFacade facade) {
         this.facade = facade;
@@ -24,19 +41,26 @@ public class AdminPanel extends JPanel {
         setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
 
         initUI();
-        startAutoRefresh();
+        facade.addRefreshListener(this::refreshData);
         refreshData();
     }
 
     private void initUI() {
+        // Top: Statistics Panel
         JPanel statsPanel = createStatsPanel();
         add(statsPanel, BorderLayout.NORTH);
 
-        JPanel logPanel = createLogPanel();
-        add(logPanel, BorderLayout.CENTER);
+        // Center: Vehicles and Fines Panel
+        JPanel centerPanel = createVehicleAndFinesPanel();
+        add(centerPanel, BorderLayout.CENTER);
 
-        JPanel actionPanel = createActionPanel();
-        add(actionPanel, BorderLayout.SOUTH);
+        // Bottom: Fine Scheme, Test Mode, and Refresh
+        JPanel bottomPanel = new JPanel(new GridLayout(3, 1));
+        bottomPanel.add(createFineSchemePanel());
+        bottomPanel.add(createTestModePanel());
+        bottomPanel.add(createButtonPanel());
+
+        add(bottomPanel, BorderLayout.SOUTH);
     }
 
     private JPanel createStatsPanel() {
@@ -86,48 +110,109 @@ public class AdminPanel extends JPanel {
         return panel;
     }
 
-    private JPanel createLogPanel() {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("System Activity Log"));
+    private JPanel createVehicleAndFinesPanel() {
+        JPanel panel = new JPanel(new GridLayout(1, 2, 10, 10));
 
-        systemLogArea = new JTextArea();
-        systemLogArea.setEditable(false);
-        systemLogArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        systemLogArea.setBackground(Color.BLACK);
-        systemLogArea.setForeground(Color.GREEN);
+        // Current Vehicles Panel
+        JPanel vehiclesPanel = new JPanel(new BorderLayout());
+        vehiclesPanel.setBorder(BorderFactory.createTitledBorder("Vehicles Currently Parked"));
+        currentVehiclesArea = new JTextArea(10, 30);
+        currentVehiclesArea.setEditable(false);
+        currentVehiclesArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        vehiclesPanel.add(new JScrollPane(currentVehiclesArea), BorderLayout.CENTER);
 
-        JScrollPane scrollPane = new JScrollPane(systemLogArea);
-        panel.add(scrollPane, BorderLayout.CENTER);
+        // Unpaid Fines Panel
+        JPanel finesPanel = new JPanel(new BorderLayout());
+        finesPanel.setBorder(BorderFactory.createTitledBorder("Unpaid Fines"));
+        unpaidFinesArea = new JTextArea(10, 30);
+        unpaidFinesArea.setEditable(false);
+        unpaidFinesArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        unpaidFinesArea.setForeground(Color.RED);
+        finesPanel.add(new JScrollPane(unpaidFinesArea), BorderLayout.CENTER);
+
+        panel.add(vehiclesPanel);
+        panel.add(finesPanel);
+        return panel;
+    }
+
+    private JPanel createFineSchemePanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panel.setBorder(BorderFactory.createTitledBorder("Fine Scheme Selection"));
+
+        panel.add(new JLabel("Select Fine Scheme:"));
+        fineSchemeCombo = new JComboBox<>(new String[]{
+                "Fixed (RM 50)",
+                "Progressive",
+                "Hourly (RM 20/hr)"
+        });
+        applySchemeBtn = new JButton("Apply Scheme");
+
+        panel.add(fineSchemeCombo);
+        panel.add(applySchemeBtn);
+
+        applySchemeBtn.addActionListener(e -> {
+            String selected = (String) fineSchemeCombo.getSelectedItem();
+
+            // Save to database
+            try (Connection conn = DatabaseConnection.connect();
+                 PreparedStatement pstmt = conn.prepareStatement(
+                         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")) {
+                pstmt.setString(1, "fine_scheme");
+                pstmt.setString(2, selected);
+                pstmt.executeUpdate();
+
+                JOptionPane.showMessageDialog(this,
+                        "Fine scheme set to: " + selected + "\nWill apply to future entries only",
+                        "Scheme Updated",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(this,
+                        "Error saving scheme: " + ex.getMessage(),
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        });
 
         return panel;
     }
 
-    private JPanel createActionPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 20, 10));
+    private JPanel createTestModePanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panel.setBorder(BorderFactory.createTitledBorder("Test Mode (For Demo Only)"));
 
-        JButton refreshBtn = new JButton("Refresh Now");
+        testModeCheckBox = new JCheckBox("Enable Test Mode");
+        testHoursSpinner = new JSpinner(new SpinnerNumberModel(25, 1, 72, 1));
+        testHoursSpinner.setEnabled(false);
+
+        testModeCheckBox.addActionListener(e -> {
+            testHoursSpinner.setEnabled(testModeCheckBox.isSelected());
+            // Save to system properties
+            System.setProperty("test.mode", String.valueOf(testModeCheckBox.isSelected()));
+            System.setProperty("test.hours", testHoursSpinner.getValue().toString());
+        });
+
+        testHoursSpinner.addChangeListener(e -> {
+            System.setProperty("test.hours", testHoursSpinner.getValue().toString());
+        });
+
+        panel.add(testModeCheckBox);
+        panel.add(new JLabel("Simulate Hours:"));
+        panel.add(testHoursSpinner);
+
+        return panel;
+    }
+
+    private JPanel createButtonPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        JButton refreshBtn = new JButton("Refresh Data");
         refreshBtn.addActionListener(e -> refreshData());
-
-        JButton resetDbBtn = new JButton("Reset Database");
-        resetDbBtn.addActionListener(e -> resetDatabase());
-
-        JButton generateReportBtn = new JButton("Generate Full Report");
-        generateReportBtn.addActionListener(e -> generateReport());
-
         panel.add(refreshBtn);
-        panel.add(resetDbBtn);
-        panel.add(generateReportBtn);
-
         return panel;
-    }
-
-    private void startAutoRefresh() {
-        refreshTimer = new Timer(5000, e -> refreshData());
-        refreshTimer.start();
     }
 
     private void refreshData() {
         try {
+            // Update statistics
             int total = facade.getTotalSpots();
             int occupied = facade.getCurrentOccupancy();
             int available = total - occupied;
@@ -142,42 +227,76 @@ public class AdminPanel extends JPanel {
             todayRevenueLabel.setText(String.format("RM %.2f", revenue));
             todayFinesLabel.setText(String.format("RM %.2f", fines));
 
-            String timestamp = java.time.LocalTime.now().format(
-                    java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-            systemLogArea.append(String.format("[%s] Stats updated - Occupied: %d/%d (%.1f%%)%n",
-                    timestamp, occupied, total, rate));
+            // Update current vehicles list
+            refreshCurrentVehicles();
 
-            systemLogArea.setCaretPosition(systemLogArea.getDocument().getLength());
+            // Update unpaid fines
+            refreshUnpaidFines();
 
         } catch (SQLException e) {
-            systemLogArea.append("ERROR refreshing data: " + e.getMessage() + "\n");
+            JOptionPane.showMessageDialog(this,
+                    "Error refreshing data: " + e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
         }
     }
 
-    private void resetDatabase() {
-        int confirm = JOptionPane.showConfirmDialog(this,
-                "Are you sure you want to reset ALL parking spots?",
-                "Reset Database",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.WARNING_MESSAGE);
+    private void refreshCurrentVehicles() {
+        try {
+            List<Ticket> tickets = new TicketDAO().getAllActiveTickets();
+            StringBuilder sb = new StringBuilder();
+            sb.append(" LICENSE PLATE | SPOT   | ENTRY TIME\n");
+            sb.append("----------------------------------------\n");
 
-        if (confirm == JOptionPane.YES_OPTION) {
-            try {
-                dao.ParkingSpotDAO dao = new dao.ParkingSpotDAO();
-                dao.initializeSpotsIfEmpty();
-                systemLogArea.append("*** DATABASE RESET - All spots reinitialized ***\n");
-                refreshData();
-            } catch (Exception e) {
-                systemLogArea.append("ERROR resetting database: " + e.getMessage() + "\n");
+            for (Ticket t : tickets) {
+                String time = t.getEntryTime().format(
+                        java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+                sb.append(String.format(" %-14s | %-6s | %s\n",
+                        t.getLicensePlate(), t.getSpotId(), time));
             }
+
+            if (tickets.isEmpty()) {
+                sb.append("\n No vehicles currently parked.");
+            }
+
+            currentVehiclesArea.setText(sb.toString());
+
+        } catch (SQLException e) {
+            currentVehiclesArea.setText("Error loading vehicles: " + e.getMessage());
         }
     }
 
-    private void generateReport() {
-        JFrame reportFrame = new JFrame("Full System Report");
-        reportFrame.setSize(800, 600);
-        reportFrame.setLocationRelativeTo(this);
-        reportFrame.add(new ReportPanel(facade));
-        reportFrame.setVisible(true);
+    private void refreshUnpaidFines() {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append(" LICENSE PLATE | FINE AMOUNT\n");
+            sb.append("--------------------------------\n");
+
+            String sql = "SELECT license_plate, SUM(fine_amount) as total FROM fines WHERE is_paid = 0 GROUP BY license_plate";
+            try (Connection conn = DatabaseConnection.connect();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+
+                double totalOutstanding = 0;
+                while (rs.next()) {
+                    double amount = rs.getDouble("total");
+                    totalOutstanding += amount;
+                    sb.append(String.format(" %-14s | RM %.2f\n",
+                            rs.getString("license_plate"), amount));
+                }
+
+                sb.append("\n");
+                sb.append(String.format(" TOTAL OUTSTANDING: RM %.2f", totalOutstanding));
+
+                if (totalOutstanding == 0) {
+                    sb.append("\n No unpaid fines.");
+                }
+            }
+
+            unpaidFinesArea.setText(sb.toString());
+
+        } catch (Exception e) {
+            unpaidFinesArea.setText("Error loading fines: " + e.getMessage());
+        }
     }
 }
