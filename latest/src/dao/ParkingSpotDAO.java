@@ -35,9 +35,18 @@ public class ParkingSpotDAO {
                             String type = "Regular";
                             double rate = 5.0;
 
-                            if (r == 1 && s <= 5) { type = "Compact"; rate = 2.0; }
-                            else if (r == 3 && s >= 9) { type = "Reserved"; rate = 10.0; }
-                            else if (f == 1 && r == 1 && s >= 8) { type = "Handicapped"; rate = 2.0; }
+                            if (r == 1 && s <= 5) {
+                                type = "Compact";
+                                rate = 2.0;
+                            }
+                            else if (r == 3 && s >= 9) {
+                                type = "Reserved";
+                                rate = 10.0;
+                            }
+                            else if (f == 1 && r == 1 && s >= 8) {
+                                type = "Handicapped";
+                                rate = 2.0;
+                            }
 
                             pstmt.setInt(1, globalId++);
                             pstmt.setString(2, clientSpotId);
