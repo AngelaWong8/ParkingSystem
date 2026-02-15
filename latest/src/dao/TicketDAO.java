@@ -30,26 +30,17 @@ public class TicketDAO {
 
         try (Connection conn = DatabaseConnection.connect();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, licensePlate);
+            pstmt.setString(1, licensePlate.toUpperCase()); // Convert to uppercase for search
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    // 1. Create the ticket object
-                    Ticket ticket = new Ticket(
-                            rs.getString("license_plate"),
-                            rs.getString("spot_id")
-                    );
-
-                    // 2. Load the ACTUAL entry time from the database
+                    String ticketId = rs.getString("ticket_id");
+                    String spotId = rs.getString("spot_id");
                     String entryTimeStr = rs.getString("entry_time");
-                    if (entryTimeStr != null) {
-                        // Convert the text back into a date/time object
-                        LocalDateTime dbTime = LocalDateTime.parse(entryTimeStr, FORMATTER);
-                        // Overwrite the "now" time with the "database" time
-                        ticket.setEntryTime(dbTime);
-                    }
 
-                    return ticket;
+                    LocalDateTime entryTime = LocalDateTime.parse(entryTimeStr, FORMATTER);
+
+                    return new Ticket(ticketId, licensePlate, spotId, entryTime);
                 }
             }
         }
@@ -61,7 +52,7 @@ public class TicketDAO {
 
         try (Connection conn = DatabaseConnection.connect();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, licensePlate);
+            pstmt.setString(1, licensePlate.toUpperCase());
             pstmt.executeUpdate();
         }
     }
@@ -75,10 +66,14 @@ public class TicketDAO {
              ResultSet rs = stmt.executeQuery(sql)) {
 
             while (rs.next()) {
-                tickets.add(new Ticket(
-                        rs.getString("license_plate"),
-                        rs.getString("spot_id")
-                ));
+                String ticketId = rs.getString("ticket_id");
+                String licensePlate = rs.getString("license_plate");
+                String spotId = rs.getString("spot_id");
+                String entryTimeStr = rs.getString("entry_time");
+
+                LocalDateTime entryTime = LocalDateTime.parse(entryTimeStr, FORMATTER);
+
+                tickets.add(new Ticket(ticketId, licensePlate, spotId, entryTime));
             }
         }
         return tickets;
