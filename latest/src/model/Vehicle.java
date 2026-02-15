@@ -9,14 +9,14 @@ public abstract class Vehicle {
     private LocalDateTime exitTime;
 
     public Vehicle(String licensePlate, String vehicleType) {
-        this.licensePlate = licensePlate;
+        this.licensePlate = licensePlate.toUpperCase(); // Store as uppercase
         this.vehicleType = vehicleType;
         this.entryTime = null;
         this.exitTime = null;
     }
 
     public String getLicensePlate() { return licensePlate; }
-    public void setLicensePlate(String licensePlate) { this.licensePlate = licensePlate; }
+    public void setLicensePlate(String licensePlate) { this.licensePlate = licensePlate.toUpperCase(); }
     public String getVehicleType() { return vehicleType; }
     public LocalDateTime getEntryTime() { return entryTime; }
     public void setEntryTime(LocalDateTime entryTime) { this.entryTime = entryTime; }
