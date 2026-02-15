@@ -9,14 +9,19 @@ public class Ticket {
     private String spotId;
     private LocalDateTime entryTime;
 
+    // Constructor for NEW tickets (entry time = now)
     public Ticket(String licensePlate, String spotId) {
-        this.licensePlate = licensePlate;
+        this.licensePlate = licensePlate.toUpperCase(); // Store as uppercase
         this.spotId = spotId;
         this.entryTime = LocalDateTime.now();
         this.ticketId = generateTicketId();
     }
 
-    public void setEntryTime(LocalDateTime entryTime) {
+    // Constructor for EXISTING tickets (with specific entry time)
+    public Ticket(String ticketId, String licensePlate, String spotId, LocalDateTime entryTime) {
+        this.ticketId = ticketId;
+        this.licensePlate = licensePlate.toUpperCase(); // Store as uppercase
+        this.spotId = spotId;
         this.entryTime = entryTime;
     }
 
@@ -35,6 +40,6 @@ public class Ticket {
         return "Ticket: " + ticketId + "\n" +
                 "Vehicle: " + licensePlate + "\n" +
                 "Spot: " + spotId + "\n" +
-                "Entry Time: " + entryTime;
+                "Entry Time: " + entryTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
     }
 }
