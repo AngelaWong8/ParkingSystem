@@ -15,6 +15,8 @@ public class PaymentDAO {
             pstmt.setString(5, method);
             pstmt.setString(6, LocalDateTime.now().toString());
             pstmt.executeUpdate();
+
+            System.out.println("Payment saved: " + amount + " for " + plate + " with method: " + method);
         }
     }
 
@@ -38,21 +40,47 @@ public class PaymentDAO {
         }
     }
 
-    public void createFine(String ticketId, String plate, double amount, long overstayMinutes, String method) throws SQLException {
-        String sql = "INSERT INTO fines (fine_id, ticket_id, license_plate, fine_amount, original_amount, paid_amount, overstay_minutes, calculation_method, is_paid, created_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    public void createFine(String ticketId, String plate, double amount, long overstayMinutes, String fineType, String method) throws SQLException {
+        // First check if a fine already exists for this ticket and type
+        String checkSql = "SELECT fine_id, paid_amount FROM fines WHERE ticket_id = ? AND fine_type = ?";
         try (Connection conn = DatabaseConnection.connect();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, "FINE-" + System.currentTimeMillis());
-            pstmt.setString(2, ticketId);
-            pstmt.setString(3, plate);
-            pstmt.setDouble(4, amount);
-            pstmt.setDouble(5, amount);
-            pstmt.setDouble(6, 0);
-            pstmt.setLong(7, overstayMinutes);
-            pstmt.setString(8, method);
-            pstmt.setInt(9, 0);
-            pstmt.setString(10, LocalDateTime.now().toString());
-            pstmt.executeUpdate();
+             PreparedStatement checkStmt = conn.prepareStatement(checkSql)) {
+
+            checkStmt.setString(1, ticketId);
+            checkStmt.setString(2, fineType);
+            ResultSet rs = checkStmt.executeQuery();
+
+            if (rs.next()) {
+                // Update existing fine
+                String fineId = rs.getString("fine_id");
+                double existingPaid = rs.getDouble("paid_amount");
+                String updateSql = "UPDATE fines SET fine_amount = ?, paid_amount = ? WHERE fine_id = ?";
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
+                    updateStmt.setDouble(1, amount);
+                    updateStmt.setDouble(2, existingPaid);
+                    updateStmt.setString(3, fineId);
+                    updateStmt.executeUpdate();
+                    System.out.println("Updated existing fine: " + fineId + " amount: " + amount + " paid: " + existingPaid);
+                }
+            } else {
+                // Create new fine
+                String sql = "INSERT INTO fines (fine_id, ticket_id, license_plate, fine_amount, original_amount, paid_amount, fine_type, overstay_minutes, calculation_method, is_paid, created_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, "FINE-" + System.currentTimeMillis());
+                    pstmt.setString(2, ticketId);
+                    pstmt.setString(3, plate);
+                    pstmt.setDouble(4, amount);
+                    pstmt.setDouble(5, amount);
+                    pstmt.setDouble(6, 0);
+                    pstmt.setString(7, fineType);
+                    pstmt.setLong(8, overstayMinutes);
+                    pstmt.setString(9, method);
+                    pstmt.setInt(10, 0);
+                    pstmt.setString(11, LocalDateTime.now().toString());
+                    pstmt.executeUpdate();
+                    System.out.println("Created new fine: " + amount + " for " + plate + " type: " + fineType);
+                }
+            }
         }
     }
 
@@ -84,7 +112,7 @@ public class PaymentDAO {
                 }
 
                 // If fully paid, mark as paid
-                if (outstanding - paymentForThisFine <= 0.01) { // Small epsilon for floating point
+                if (outstanding - paymentForThisFine <= 0.01) {
                     String markPaidSql = "UPDATE fines SET is_paid = 1 WHERE fine_id = ?";
                     try (PreparedStatement markStmt = conn.prepareStatement(markPaidSql)) {
                         markStmt.setString(1, fineId);
@@ -92,6 +120,21 @@ public class PaymentDAO {
                     }
                 }
             }
+        }
+    }
+
+    public double getPaidFinesByDate(String date) throws SQLException {
+        String sql = "SELECT SUM(amount_paid) FROM payments WHERE date(payment_time) = ? " +
+                "AND (payment_method LIKE '%FINE%' OR payment_method LIKE '%OVERSTAY%' " +
+                "OR payment_method LIKE '%RESERVATION%')";
+
+        try (Connection conn = DatabaseConnection.connect();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, date);
+            ResultSet rs = pstmt.executeQuery();
+            double result = rs.next() ? rs.getDouble(1) : 0.0;
+            System.out.println("Paid fines on " + date + ": RM " + result);
+            return result;
         }
     }
 }
