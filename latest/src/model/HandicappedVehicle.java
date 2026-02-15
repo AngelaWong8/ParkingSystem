@@ -10,8 +10,8 @@ public class HandicappedVehicle extends Vehicle {
 
     @Override
     public boolean canParkIn(String spotType) {
-        return spotType.equalsIgnoreCase("Handicapped") ||
-                spotType.equalsIgnoreCase("Regular");
+        // Handicapped vehicles can park in ANY spot type
+        return true;
     }
 
     public boolean hasHandicappedCard() {
