@@ -9,7 +9,7 @@ public abstract class Vehicle {
     private LocalDateTime exitTime;
 
     public Vehicle(String licensePlate, String vehicleType) {
-        this.licensePlate = licensePlate.toUpperCase(); // Store as uppercase
+        this.licensePlate = licensePlate.toUpperCase();
         this.vehicleType = vehicleType;
         this.entryTime = null;
         this.exitTime = null;
@@ -24,6 +24,10 @@ public abstract class Vehicle {
     public void setExitTime(LocalDateTime exitTime) { this.exitTime = exitTime; }
 
     public abstract boolean canParkIn(String spotType);
+
+    public boolean canParkInReserved() {
+        return true;  // All vehicles can use Reserved spots (just get fined if no reservation)
+    }
 
     @Override
     public String toString() {
