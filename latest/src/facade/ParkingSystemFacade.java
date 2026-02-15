@@ -6,7 +6,7 @@ import database.DatabaseConnection;
 
 import java.sql.SQLException;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -16,19 +16,27 @@ public class ParkingSystemFacade {
     private VehicleDAO vehicleDAO;
     private TicketDAO ticketDAO;
     private ReportDAO reportDAO;
+    private PaymentDAO paymentDAO;
 
-    // Person C DAOs - commented until they deliver
-    // private PaymentDAO paymentDAO;
-    // private FineDAO fineDAO;
+    // Refresh listeners
+    private List<Runnable> refreshListeners = new ArrayList<>();
 
     public ParkingSystemFacade() {
         this.parkingSpotDAO = new ParkingSpotDAO();
         this.vehicleDAO = new VehicleDAO();
         this.ticketDAO = new TicketDAO();
         this.reportDAO = new ReportDAO();
+        this.paymentDAO = new PaymentDAO();
+    }
 
-        // this.paymentDAO = new PaymentDAO();
-        // this.fineDAO = new FineDAO();
+    public void addRefreshListener(Runnable listener) {
+        refreshListeners.add(listener);
+    }
+
+    public void notifyRefresh() {
+        for (Runnable listener : refreshListeners) {
+            listener.run();
+        }
     }
 
     // ============ PERSON A's METHODS ============
@@ -43,6 +51,7 @@ public class ParkingSystemFacade {
 
     public void updateSpotStatus(int spotDbId, boolean occupied) {
         parkingSpotDAO.updateSpotStatus(spotDbId, occupied);
+        notifyRefresh();
     }
 
     // ============ PERSON B's METHODS ============
@@ -50,34 +59,83 @@ public class ParkingSystemFacade {
     public void parkVehicle(String licensePlate, String vehicleType, boolean hasCard, String spotId)
             throws SQLException {
 
+        System.out.println("\n=== PARK VEHICLE DEBUG ===");
+        System.out.println("License Plate: " + licensePlate);
+        System.out.println("Vehicle Type: " + vehicleType);
+        System.out.println("Has Card: " + hasCard);
+        System.out.println("Spot ID received: '" + spotId + "'");
+        System.out.println("Spot ID length: " + spotId.length());
+
         Vehicle vehicle;
         switch (vehicleType) {
-            case "CAR": vehicle = new Car(licensePlate); break;
-            case "MOTORCYCLE": vehicle = new Motorcycle(licensePlate); break;
-            case "SUV": vehicle = new SUV(licensePlate); break;
-            case "HANDICAPPED":
-                if (!hasCard) {
-                    throw new IllegalArgumentException("Handicapped vehicles must have a card");
-                }
-                vehicle = new HandicappedVehicle(licensePlate, true);
+            case "CAR":
+                vehicle = new Car(licensePlate);
+                System.out.println("Created CAR vehicle");
                 break;
-            default: throw new IllegalArgumentException("Invalid vehicle type");
+            case "MOTORCYCLE":
+                vehicle = new Motorcycle(licensePlate);
+                System.out.println("Created MOTORCYCLE vehicle");
+                break;
+            case "SUV":
+                vehicle = new SUV(licensePlate);
+                System.out.println("Created SUV vehicle");
+                break;
+            case "HANDICAPPED":
+                // Remove the 'if (!hasCard)' throw block entirely --AZ
+                vehicle = new HandicappedVehicle(licensePlate, hasCard); // Pass the actual hasCard value
+                System.out.println("Created HANDICAPPED vehicle (Card: " + hasCard + ")");
+                break;
+            default:
+                throw new IllegalArgumentException("Invalid vehicle type");
         }
 
         vehicle.setEntryTime(LocalDateTime.now());
         vehicleDAO.saveVehicle(vehicle);
+        System.out.println("✓ Vehicle saved to DB");
 
         Ticket ticket = new Ticket(licensePlate, spotId);
         ticketDAO.saveTicket(ticket);
+        System.out.println("✓ Ticket saved to DB");
 
+        System.out.println("\n--- Looking up spot in database ---");
         ParkingSpot spot = parkingSpotDAO.getSpotBySpotId(spotId);
+
         if (spot != null) {
+            System.out.println("✓ Spot found in database!");
+            System.out.println("  Spot DB ID: " + spot.getDbId());
+            System.out.println("  Spot ID string: " + spot.getSpotId());
+            System.out.println("  Spot type: " + spot.getType());
+            System.out.println("  Current occupied status: " + spot.isOccupied());
+
+            System.out.println("\n--- Updating spot status to OCCUPIED ---");
             parkingSpotDAO.updateSpotStatus(spot.getDbId(), true);
+
+            // Verify the update
+            ParkingSpot verifySpot = parkingSpotDAO.getSpotBySpotId(spotId);
+            System.out.println("\n--- Verification after update ---");
+            System.out.println("Spot occupied now: " + verifySpot.isOccupied());
+
+            if (verifySpot.isOccupied()) {
+                System.out.println("✓ SUCCESS: Spot successfully marked as occupied");
+            } else {
+                System.out.println("❌ FAILED: Spot still shows as available");
+            }
+        } else {
+            System.out.println("❌ SPOT NOT FOUND IN DATABASE!");
+            System.out.println("The spot ID '" + spotId + "' does not match any spot in the database");
         }
+
+        System.out.println("=== END PARK VEHICLE DEBUG ===\n");
+
+        notifyRefresh();
     }
 
-    public Vehicle findVehicle(String licensePlate) throws SQLException {
-        return vehicleDAO.findVehicle(licensePlate);
+    public Vehicle findVehicle(String licensePlate) { // i changed this --AZ
+        try {
+            return vehicleDAO.findVehicle(licensePlate);
+        } catch (SQLException e) {
+            return null;
+        }
     }
 
     public Ticket findActiveTicket(String licensePlate) throws SQLException {
@@ -91,18 +149,26 @@ public class ParkingSystemFacade {
                 .collect(Collectors.toList());
     }
 
-    // ============ PERSON C's METHODS (STUBBED - WAITING) ============
+    // ============ PERSON C's METHODS ============
 
-    /*
-    public Payment processExit(String licensePlate, String paymentMethod) throws SQLException {
-        // Will be implemented when Person C delivers
-        return null;
-    }
+    public void processExit(String licensePlate, String paymentMethod, double amount, double fines) throws SQLException {
+        Ticket ticket = findActiveTicket(licensePlate);
+        if (ticket != null) {
+            // Save payment
+            paymentDAO.savePayment(ticket.getTicketId(), licensePlate, amount, paymentMethod);
 
-    public Fine calculateFine(Ticket ticket, long overstayMinutes) {
-        return null;
+            // Mark spot as available
+            ParkingSpot spot = parkingSpotDAO.getSpotBySpotId(ticket.getSpotId());
+            if (spot != null) {
+                parkingSpotDAO.updateSpotStatus(spot.getDbId(), false);
+            }
+
+            // Remove ticket
+            ticketDAO.removeTicket(licensePlate);
+
+            notifyRefresh();
+        }
     }
-    */
 
     // ============ PERSON D's METHODS (REPORTS & ADMIN) ============
 
@@ -116,7 +182,9 @@ public class ParkingSystemFacade {
 
     public int getCurrentOccupancy() {
         List<ParkingSpot> spots = parkingSpotDAO.getAllSpots();
-        return (int) spots.stream().filter(ParkingSpot::isOccupied).count();
+        int occupied = (int) spots.stream().filter(ParkingSpot::isOccupied).count();
+        System.out.println("Current occupancy count: " + occupied + "/" + spots.size());
+        return occupied;
     }
 
     public int getTotalSpots() {
