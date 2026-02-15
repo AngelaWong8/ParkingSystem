@@ -11,6 +11,8 @@ import java.sql.*;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class ExitPanel extends JPanel {
     private ParkingSystemFacade facade;
@@ -19,6 +21,7 @@ public class ExitPanel extends JPanel {
     private JComboBox<String> paymentMethodCombo;
     private JTextField amountPaidField = new JTextField(10);
     private FineStrategy fineStrategy = new FixedFineStrategy(); // Default
+    private static final Logger LOGGER = Logger.getLogger(ExitPanel.class.getName());
 
     // Test mode
     private boolean testMode = false;
@@ -33,31 +36,35 @@ public class ExitPanel extends JPanel {
 
         // Register for refresh
         facade.addRefreshListener(this::clearScreen);
-
-        // Load saved fine scheme
-        loadFineScheme();
     }
 
     private void loadFineScheme() {
+        String sql = "SELECT value FROM settings WHERE key = 'fine_scheme'";
         try (Connection conn = DatabaseConnection.connect();
-             PreparedStatement pstmt = conn.prepareStatement("SELECT value FROM settings WHERE key = 'fine_scheme'")) {
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
             ResultSet rs = pstmt.executeQuery();
             if (rs.next()) {
                 String scheme = rs.getString("value");
-                switch (scheme) {
-                    case "Fixed (RM 50)":
-                        fineStrategy = new FixedFineStrategy();
-                        break;
-                    case "Progressive":
-                        fineStrategy = new ProgressiveFineStrategy();
-                        break;
-                    case "Hourly (RM 20/hr)":
-                        fineStrategy = new HourlyFineStrategy();
-                        break;
+                LOGGER.info("Loading fine scheme: " + scheme);
+
+                if (scheme.contains("Fixed")) {
+                    fineStrategy = new FixedFineStrategy();
+                    LOGGER.info("Using Fixed Fine Strategy");
+                } else if (scheme.contains("Progressive")) {
+                    fineStrategy = new ProgressiveFineStrategy();
+                    LOGGER.info("Using Progressive Fine Strategy");
+                } else if (scheme.contains("Hourly")) {
+                    fineStrategy = new HourlyFineStrategy();
+                    LOGGER.info("Using Hourly Fine Strategy");
                 }
+            } else {
+                LOGGER.info("No fine scheme found in database, using default Fixed");
+                fineStrategy = new FixedFineStrategy();
             }
         } catch (SQLException e) {
-            // Use default
+            LOGGER.log(Level.WARNING, "Error loading fine scheme, using default Fixed", e);
+            fineStrategy = new FixedFineStrategy();
         }
     }
 
@@ -140,6 +147,9 @@ public class ExitPanel extends JPanel {
     }
 
     private void calculateExit() {
+        // Load the current fine scheme from database before calculating
+        loadFineScheme();
+
         try {
             String plate = plateField.getText().trim().toUpperCase();
             if (plate.isEmpty()) {
@@ -194,37 +204,58 @@ public class ExitPanel extends JPanel {
             ParkingSpot spot = new ParkingSpotDAO().getSpotBySpotId(ticket.getSpotId());
             Vehicle vehicle = facade.findVehicle(plate);
 
-            // Calculate base fee
+            // Calculate base fee with handicapped override
             double rate = (spot != null) ? spot.getHourlyRate() : 5.0;
             String rateDescription = String.format("RM %.2f/hr", rate);
 
-            // Apply handicapped discounts
+            // Apply handicapped discounts - OVERRIDE for handicapped vehicles
             if (vehicle instanceof HandicappedVehicle) {
                 HandicappedVehicle hv = (HandicappedVehicle) vehicle;
-                String actualSpotType = (spot != null) ? spot.getType() : "Regular";
 
                 if (hv.hasHandicappedCard()) {
-                    if (actualSpotType.equalsIgnoreCase("Handicapped")) {
+                    // Card holder gets special rates
+                    if (spot != null && spot.getType().equalsIgnoreCase("Handicapped")) {
                         rate = 0.0; // Card + Handicapped Spot = FREE
                         rateDescription = "FREE (Handicapped Card + Handicapped Spot)";
                     } else {
-                        rate = 2.0; // Card + Regular Spot = RM 2.00
-                        rateDescription = "RM 2.00/hr (Handicapped Card)";
+                        rate = 2.0; // Card in any other spot = RM 2.00 (override)
+                        rateDescription = "RM 2.00/hr (Handicapped Card - Special Rate)";
                     }
+                } else {
+                    // Handicapped vehicle without card - still gets RM2/hr in any spot
+                    rate = 2.0; // All handicapped vehicles get RM2/hr regardless of spot
+                    rateDescription = "RM 2.00/hr (Handicapped Vehicle - Special Rate)";
                 }
             }
 
             double baseFee = hours * rate;
 
-            // Calculate fines (after 24 hours = 1440 minutes)
+            // Calculate fines - only apply to time beyond 24 hours (1440 minutes)
             double currentFine = 0;
             String fineDescription = "";
-            long overstayMins = 0;
+            long totalMins = mins;
+            long overstayMins = Math.max(0, totalMins - 1440); // Minutes beyond 24 hours
+            String fineType = "";
 
-            if (mins > 1440) {
-                overstayMins = mins - 1440;
-                currentFine = fineStrategy.calculateFine(overstayMins);
-                fineDescription = "Overstay fine (" + (overstayMins/60) + " hrs over 24hr limit) - " + fineStrategy.getSchemeName();
+            // Pass ONLY the overstay minutes to the fine strategy
+            currentFine = fineStrategy.calculateFine(overstayMins);
+
+            if (currentFine > 0) {
+                long totalHours = (long) Math.ceil(totalMins / 60.0);
+                long overstayHours = (long) Math.ceil(overstayMins / 60.0);
+
+                if (fineStrategy instanceof HourlyFineStrategy) {
+                    fineDescription = String.format("Overstay fine (%d hrs over 24hr limit × RM20/hr) - %s",
+                            overstayHours, fineStrategy.getSchemeName());
+                } else if (fineStrategy instanceof ProgressiveFineStrategy) {
+                    fineDescription = "Overstay fine (progressive rate) - " + fineStrategy.getSchemeName();
+                } else {
+                    fineDescription = String.format("Overstay fine (%d hrs over 24hr limit) - %s",
+                            overstayHours, fineStrategy.getSchemeName());
+                }
+                fineType = "OVERSTAY";
+                System.out.println("Total minutes: " + totalMins + ", Overstay minutes: " + overstayMins +
+                        ", Fine: " + currentFine + " using " + fineStrategy.getSchemeName());
             }
 
             // Reserved spot misuse check using ReservationDAO
@@ -236,8 +267,10 @@ public class ExitPanel extends JPanel {
                     currentFine += 50.0;
                     if (fineDescription.isEmpty()) {
                         fineDescription = "Reserved spot without reservation (RM 50 fine)";
+                        fineType = "RESERVATION_MISUSE";
                     } else {
                         fineDescription += " + Reserved spot fine (RM 50)";
+                        fineType = "MULTIPLE";
                     }
                 }
             }
@@ -266,6 +299,17 @@ public class ExitPanel extends JPanel {
             if (currentFine > 0) {
                 receipt.append("\nCURRENT VISIT FINES:\n");
                 receipt.append(String.format("  %s: RM %.2f\n", fineDescription, currentFine));
+
+                // Add detailed breakdown for hourly fine
+                if (fineStrategy instanceof HourlyFineStrategy && overstayMins > 0) {
+                    long overstayHours = (long) Math.ceil(overstayMins / 60.0);
+                    receipt.append(String.format("  (First 24 hours: no fine, Next %d hours: %d × RM20 = RM%.2f)\n",
+                            overstayHours, overstayHours, overstayHours * 20.0));
+                }
+                // Add breakdown for progressive fine
+                else if (fineStrategy instanceof ProgressiveFineStrategy && overstayMins > 0) {
+                    receipt.append("  (First 24h: RM50, 24-48h: +RM100, 48-72h: +RM150, >72h: +RM200)\n");
+                }
             }
 
             if (unpaidFines > 0) {
@@ -297,6 +341,7 @@ public class ExitPanel extends JPanel {
             putClientProperty("spot", spot);
             putClientProperty("overstayMins", overstayMins);
             putClientProperty("fineDescription", fineDescription);
+            putClientProperty("fineType", fineType);
 
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage());
@@ -347,49 +392,94 @@ public class ExitPanel extends JPanel {
             double unpaidFines = (double) getClientProperty("unpaidFines");
             double baseFee = (double) getClientProperty("baseFee");
             long overstayMins = (long) getClientProperty("overstayMins");
+            String fineType = (String) getClientProperty("fineType");
 
             PaymentDAO paymentDAO = new PaymentDAO();
+            double originalAmountPaid = amountPaid;
+            double remainingToAllocate = amountPaid;
 
-            // First, apply payment to unpaid fines from previous visits (oldest first)
-            if (unpaidFines > 0) {
-                double paymentForOldFines = Math.min(amountPaid, unpaidFines);
-                if (paymentForOldFines > 0) {
-                    paymentDAO.updateFinePayment(plate, paymentForOldFines);
+            // Track payments
+            double paidTowardBaseFee = 0;
+            double paidTowardCurrentFine = 0;
+            double paidTowardOldFines = 0;
+
+            // PRIORITY 1: Pay current parking fee first
+            if (remainingToAllocate > 0 && baseFee > 0) {
+                paidTowardBaseFee = Math.min(remainingToAllocate, baseFee);
+                if (paidTowardBaseFee > 0) {
+                    paymentDAO.savePayment(ticket.getTicketId(), plate, paidTowardBaseFee, method);
+                    System.out.println("Paid RM " + paidTowardBaseFee + " toward parking fee");
                 }
-                amountPaid -= paymentForOldFines;
+                remainingToAllocate -= paidTowardBaseFee;
             }
 
-            // Then apply to current fines if any
-            if (amountPaid > 0 && currentFine > 0) {
-                double paymentForCurrentFine = Math.min(amountPaid, currentFine);
-                // If they don't pay the full current fine, create a fine record
-                if (paymentForCurrentFine < currentFine) {
-                    double remainingFine = currentFine - paymentForCurrentFine;
-                    // FIXED: Call createFine with 5 parameters to match your PaymentDAO
-                    paymentDAO.createFine(ticket.getTicketId(), plate, remainingFine, overstayMins, fineStrategy.getSchemeName());
+            // PRIORITY 2: Pay current fines next
+            if (remainingToAllocate > 0 && currentFine > 0) {
+                paidTowardCurrentFine = Math.min(remainingToAllocate, currentFine);
+                if (paidTowardCurrentFine > 0) {
+                    paymentDAO.savePayment(ticket.getTicketId(), plate, paidTowardCurrentFine,
+                            method + " - FINE (" + fineType + ")");
+                    System.out.println("Paid RM " + paidTowardCurrentFine + " toward current fine");
                 }
-                amountPaid -= paymentForCurrentFine;
+                remainingToAllocate -= paidTowardCurrentFine;
             }
 
-            // Finally apply to base parking fee
-            if (amountPaid > 0 && baseFee > 0) {
-                double paymentForBaseFee = Math.min(amountPaid, baseFee);
-                double remainingBaseFee = baseFee - paymentForBaseFee;
-
-                // Save the payment
-                if (paymentForBaseFee > 0) {
-                    paymentDAO.savePayment(ticket.getTicketId(), plate, paymentForBaseFee, method);
+            // PRIORITY 3: Pay old fines last
+            if (remainingToAllocate > 0 && unpaidFines > 0) {
+                paidTowardOldFines = Math.min(remainingToAllocate, unpaidFines);
+                if (paidTowardOldFines > 0) {
+                    paymentDAO.savePayment("OLD-FINES-" + System.currentTimeMillis(), plate,
+                            paidTowardOldFines, method + " - FINE (PREVIOUS)");
+                    paymentDAO.updateFinePayment(plate, paidTowardOldFines);
+                    System.out.println("Paid RM " + paidTowardOldFines + " toward old fines");
                 }
-
-                // If they didn't pay the full base fee, create a fine for the remainder
-                if (remainingBaseFee > 0) {
-                    // FIXED: Call createFine with 5 parameters
-                    paymentDAO.createFine(ticket.getTicketId(), plate, remainingBaseFee, 0, "Unpaid Parking Fee");
-                }
+                remainingToAllocate -= paidTowardOldFines;
             }
 
-            double amountEntered = Double.parseDouble(amountPaidField.getText().trim());
-            double remainingBalance = totalDue - amountEntered;
+            // Calculate what's still owed
+            double unpaidBaseFee = baseFee - paidTowardBaseFee;
+            double unpaidCurrentFine = currentFine - paidTowardCurrentFine;
+            double unpaidOldFines = unpaidFines - paidTowardOldFines;
+
+            double remainingBalance = unpaidBaseFee + unpaidCurrentFine + unpaidOldFines;
+
+            // Create fine records for any unpaid amounts from this visit
+            if (unpaidBaseFee > 0) {
+                paymentDAO.createFine(ticket.getTicketId(), plate, unpaidBaseFee, 0, "UNPAID_FEE", "Parking Fee");
+                System.out.println("Created UNPAID_FEE fine for RM " + unpaidBaseFee);
+            }
+
+            if (unpaidCurrentFine > 0) {
+                // Check if a fine already exists for this ticket
+                String checkSql = "SELECT fine_id, paid_amount FROM fines WHERE ticket_id = ? AND fine_type = ?";
+                try (Connection conn = DatabaseConnection.connect();
+                     PreparedStatement checkStmt = conn.prepareStatement(checkSql)) {
+
+                    checkStmt.setString(1, ticket.getTicketId());
+                    checkStmt.setString(2, fineType);
+                    ResultSet rs = checkStmt.executeQuery();
+
+                    if (rs.next()) {
+                        // Update existing fine
+                        String fineId = rs.getString("fine_id");
+                        double existingPaid = rs.getDouble("paid_amount");
+                        String updateSql = "UPDATE fines SET paid_amount = ?, fine_amount = ? WHERE fine_id = ?";
+                        try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
+                            updateStmt.setDouble(1, existingPaid + paidTowardCurrentFine);
+                            updateStmt.setDouble(2, currentFine);
+                            updateStmt.setString(3, fineId);
+                            updateStmt.executeUpdate();
+                            System.out.println("Updated existing fine, paid: " + (existingPaid + paidTowardCurrentFine) +
+                                    ", total: " + currentFine + ", outstanding: " + unpaidCurrentFine);
+                        }
+                    } else {
+                        // Create new fine
+                        paymentDAO.createFine(ticket.getTicketId(), plate, unpaidCurrentFine,
+                                overstayMins, fineType, fineStrategy.getSchemeName());
+                        System.out.println("Created new fine for RM " + unpaidCurrentFine);
+                    }
+                }
+            }
 
             // Create receipt
             DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -403,8 +493,30 @@ public class ExitPanel extends JPanel {
             paymentReceipt.append("Payment Method: ").append(method).append("\n\n");
 
             paymentReceipt.append(String.format("Total Due:       RM %.2f\n", totalDue));
-            paymentReceipt.append(String.format("Amount Paid:     RM %.2f\n", amountEntered));
-            paymentReceipt.append(String.format("Remaining Balance: RM %.2f\n\n", remainingBalance));
+            paymentReceipt.append(String.format("Amount Paid:     RM %.2f\n", originalAmountPaid));
+            paymentReceipt.append("\nPAYMENT BREAKDOWN:\n");
+            if (paidTowardBaseFee > 0) {
+                paymentReceipt.append(String.format("  - Parking Fee:    RM %.2f\n", paidTowardBaseFee));
+            }
+            if (paidTowardCurrentFine > 0) {
+                paymentReceipt.append(String.format("  - Current Fine:   RM %.2f\n", paidTowardCurrentFine));
+            }
+            if (paidTowardOldFines > 0) {
+                paymentReceipt.append(String.format("  - Previous Fines: RM %.2f\n", paidTowardOldFines));
+            }
+
+            paymentReceipt.append("\nREMAINING BALANCE BREAKDOWN:\n");
+            if (unpaidBaseFee > 0) {
+                paymentReceipt.append(String.format("  - Unpaid Parking Fee: RM %.2f\n", unpaidBaseFee));
+            }
+            if (unpaidCurrentFine > 0) {
+                paymentReceipt.append(String.format("  - Unpaid Current Fine: RM %.2f\n", unpaidCurrentFine));
+            }
+            if (unpaidOldFines > 0) {
+                paymentReceipt.append(String.format("  - Unpaid Previous Fines: RM %.2f\n", unpaidOldFines));
+            }
+
+            paymentReceipt.append(String.format("\nTOTAL REMAINING: RM %.2f\n\n", remainingBalance));
 
             if (remainingBalance <= 0.01) { // Fully paid
                 paymentReceipt.append("✓ PAID IN FULL\n");
@@ -424,14 +536,10 @@ public class ExitPanel extends JPanel {
                         "Success",
                         JOptionPane.INFORMATION_MESSAGE);
 
-                clearScreen();
-
             } else {
                 paymentReceipt.append("⚠ PARTIAL PAYMENT - Balance added to fines\n");
-                paymentReceipt.append("Remaining RM ").append(String.format("%.2f", remainingBalance));
-                paymentReceipt.append(" will be due on your next visit.\n");
 
-                // Free up the spot even with partial payment (they leave)
+                // Free up the spot (they leave)
                 if (spot != null && ticket != null) {
                     new ParkingSpotDAO().updateSpotStatus(spot.getDbId(), false);
                 }
@@ -446,12 +554,15 @@ public class ExitPanel extends JPanel {
                                 "\nThis amount will be added to your fines.",
                         "Partial Payment",
                         JOptionPane.INFORMATION_MESSAGE);
-
-                clearScreen();
             }
 
             paymentReceipt.append("\n").append("=".repeat(60));
             receiptArea.setText(paymentReceipt.toString());
+
+            // Force a refresh of the admin panel
+            facade.notifyRefresh();
+
+            clearScreen();
 
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Payment Failed: " + ex.getMessage());
@@ -522,6 +633,7 @@ public class ExitPanel extends JPanel {
         try {
             return new PaymentDAO().getUnpaidFines(plate);
         } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "Error getting unpaid fines for " + plate, e);
             return 0.0;
         }
     }
