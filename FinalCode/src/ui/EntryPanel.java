@@ -6,6 +6,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class EntryPanel extends JPanel {
     private ParkingSystemFacade facade;
@@ -123,7 +124,6 @@ public class EntryPanel extends JPanel {
         return panel;
     }
 
-    // NEW: Method to check if vehicle is already parked
     private boolean isVehicleAlreadyParked(String licensePlate) {
         try {
             Ticket existingTicket = facade.findActiveTicket(licensePlate);
@@ -157,7 +157,26 @@ public class EntryPanel extends JPanel {
             default: vehicle = null;
         }
 
-        List<ParkingSpot> availableSpots = facade.getAvailableSpotsForVehicle(vehicle);
+        // Get all available spots
+        List<ParkingSpot> allSpots = facade.getAllSpots();
+
+        // Filter spots based on vehicle type and availability
+        List<ParkingSpot> availableSpots = allSpots.stream()
+                .filter(spot -> {
+                    // Spot must be available
+                    if (spot.isOccupied()) return false;
+
+                    // Check if vehicle can park in this spot type
+                    if (spot.getType().equalsIgnoreCase("Reserved")) {
+                        // UPDATED: All vehicles can park in Reserved spots (to test fines)
+                        return true;
+                    } else {
+                        // For other spot types, use vehicle's canParkIn method
+                        return vehicle.canParkIn(spot.getType());
+                    }
+                })
+                .collect(Collectors.toList());
+
         spotListModel.clear();
 
         for (ParkingSpot spot : availableSpots) {
@@ -172,7 +191,12 @@ public class EntryPanel extends JPanel {
                     spotListModel.addElement(spot.getSpotId() + " - " + spot.getType() + " (RM " + spot.getHourlyRate() + "/hr)");
                 }
             } else {
-                spotListModel.addElement(spot.getSpotId() + " - " + spot.getType() + " (RM " + spot.getHourlyRate() + "/hr)");
+                // Add warning icon for Reserved spots to remind about fines
+                if (spot.getType().equalsIgnoreCase("Reserved")) {
+                    spotListModel.addElement("⚠ " + spot.getSpotId() + " - " + spot.getType() + " (RM " + spot.getHourlyRate() + "/hr) [Fine if no reservation]");
+                } else {
+                    spotListModel.addElement(spot.getSpotId() + " - " + spot.getType() + " (RM " + spot.getHourlyRate() + "/hr)");
+                }
             }
         }
 
@@ -189,7 +213,7 @@ public class EntryPanel extends JPanel {
         try {
             String licensePlate = licensePlateField.getText().trim().toUpperCase();
 
-            // NEW: Check if vehicle is already parked
+            // Check if vehicle is already parked
             if (isVehicleAlreadyParked(licensePlate)) {
                 JOptionPane.showMessageDialog(this,
                         "Vehicle with license plate " + licensePlate + " is already parked!",
@@ -201,13 +225,12 @@ public class EntryPanel extends JPanel {
             String selectedSpotStr = availableSpotsList.getSelectedValue();
             if (selectedSpotStr == null) return;
 
-            // Fix: Remove any special characters and extract just the spot ID
+            // Extract spot ID (remove icons and extra text)
             String spotId = selectedSpotStr.split(" - ")[0];
-            // Remove the ★ if present
-            spotId = spotId.replace("★ ", "").trim();
+            spotId = spotId.replace("★ ", "").replace("⚠ ", "").trim();
 
             System.out.println("Selected spot string: " + selectedSpotStr);
-            System.out.println("Extracted spotId: " + spotId); // Debug
+            System.out.println("Extracted spotId: " + spotId);
 
             String vehicleType = (String) vehicleTypeCombo.getSelectedItem();
             boolean hasCard = handicappedCardCheck.isSelected();
@@ -225,10 +248,18 @@ public class EntryPanel extends JPanel {
             spotListModel.clear();
             parkButton.setEnabled(false);
 
-            JOptionPane.showMessageDialog(this,
-                    "Vehicle parked successfully!\nTicket generated.",
-                    "Success",
-                    JOptionPane.INFORMATION_MESSAGE);
+            // Show warning if they parked in Reserved spot
+            if (selectedSpotStr.contains("Reserved")) {
+                JOptionPane.showMessageDialog(this,
+                        "⚠ You parked in a RESERVED spot.\nMake sure you have an active reservation or you will be fined RM50 at exit!",
+                        "Reserved Spot Warning",
+                        JOptionPane.WARNING_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this,
+                        "Vehicle parked successfully!\nTicket generated.",
+                        "Success",
+                        JOptionPane.INFORMATION_MESSAGE);
+            }
 
         } catch (SQLException | IllegalArgumentException e) {
             JOptionPane.showMessageDialog(this,
