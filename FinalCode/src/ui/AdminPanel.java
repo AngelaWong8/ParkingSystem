@@ -9,11 +9,16 @@ import javax.swing.*;
 import javax.swing.border.TitledBorder;
 import java.awt.*;
 import java.sql.*;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class AdminPanel extends JPanel {
 
-    private ParkingSystemFacade facade;
+    private final ParkingSystemFacade facade;
+    private static final Logger LOGGER = Logger.getLogger(AdminPanel.class.getName());
 
     // Stats Labels
     private JLabel totalSpotsLabel;
@@ -123,11 +128,10 @@ public class AdminPanel extends JPanel {
 
         // Unpaid Fines Panel
         JPanel finesPanel = new JPanel(new BorderLayout());
-        finesPanel.setBorder(BorderFactory.createTitledBorder("Unpaid Fines"));
+        finesPanel.setBorder(BorderFactory.createTitledBorder("Unpaid Fines by Type"));
         unpaidFinesArea = new JTextArea(10, 30);
         unpaidFinesArea.setEditable(false);
         unpaidFinesArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        unpaidFinesArea.setForeground(Color.RED);
         finesPanel.add(new JScrollPane(unpaidFinesArea), BorderLayout.CENTER);
 
         panel.add(vehiclesPanel);
@@ -137,7 +141,7 @@ public class AdminPanel extends JPanel {
 
     private JPanel createFineSchemePanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        panel.setBorder(BorderFactory.createTitledBorder("Fine Scheme Selection"));
+        panel.setBorder(BorderFactory.createTitledBorder("Fine Scheme Selection (For Overstay Fines Only)"));
 
         panel.add(new JLabel("Select Fine Scheme:"));
         fineSchemeCombo = new JComboBox<>(new String[]{
@@ -154,18 +158,20 @@ public class AdminPanel extends JPanel {
             String selected = (String) fineSchemeCombo.getSelectedItem();
 
             // Save to database
+            String sql = "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)";
             try (Connection conn = DatabaseConnection.connect();
-                 PreparedStatement pstmt = conn.prepareStatement(
-                         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")) {
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
                 pstmt.setString(1, "fine_scheme");
                 pstmt.setString(2, selected);
                 pstmt.executeUpdate();
 
                 JOptionPane.showMessageDialog(this,
-                        "Fine scheme set to: " + selected + "\nWill apply to future entries only",
+                        "Fine scheme set to: " + selected + "\nWill apply to future overstay fines only",
                         "Scheme Updated",
                         JOptionPane.INFORMATION_MESSAGE);
             } catch (SQLException ex) {
+                LOGGER.log(Level.SEVERE, "Error saving fine scheme", ex);
                 JOptionPane.showMessageDialog(this,
                         "Error saving scheme: " + ex.getMessage(),
                         "Error",
@@ -191,9 +197,9 @@ public class AdminPanel extends JPanel {
             System.setProperty("test.hours", testHoursSpinner.getValue().toString());
         });
 
-        testHoursSpinner.addChangeListener(e -> {
-            System.setProperty("test.hours", testHoursSpinner.getValue().toString());
-        });
+        testHoursSpinner.addChangeListener(e ->
+                System.setProperty("test.hours", testHoursSpinner.getValue().toString())
+        );
 
         panel.add(testModeCheckBox);
         panel.add(new JLabel("Simulate Hours:"));
@@ -212,13 +218,20 @@ public class AdminPanel extends JPanel {
 
     private void refreshData() {
         try {
+            ReportDAO reportDAO = new ReportDAO();
+
             // Update statistics
             int total = facade.getTotalSpots();
             int occupied = facade.getCurrentOccupancy();
             int available = total - occupied;
             double rate = facade.getOccupancyRate();
-            double revenue = facade.getTotalRevenueToday();
-            double fines = facade.getTotalFinesToday();
+
+            // Get fresh revenue and fines data
+            double revenue = reportDAO.getTotalRevenueToday();
+            double fines = reportDAO.getTotalFinesToday();
+
+            // Debug output
+            debugPaymentsToday();
 
             totalSpotsLabel.setText(String.valueOf(total));
             occupiedLabel.setText(String.valueOf(occupied));
@@ -230,10 +243,11 @@ public class AdminPanel extends JPanel {
             // Update current vehicles list
             refreshCurrentVehicles();
 
-            // Update unpaid fines
+            // Update unpaid fines with categories
             refreshUnpaidFines();
 
         } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "Error refreshing admin data", e);
             JOptionPane.showMessageDialog(this,
                     "Error refreshing data: " + e.getMessage(),
                     "Error",
@@ -241,61 +255,159 @@ public class AdminPanel extends JPanel {
         }
     }
 
-    private void refreshCurrentVehicles() {
-        try {
-            List<Ticket> tickets = new TicketDAO().getAllActiveTickets();
-            StringBuilder sb = new StringBuilder();
-            sb.append(" LICENSE PLATE | SPOT   | ENTRY TIME\n");
-            sb.append("----------------------------------------\n");
+    private void debugPaymentsToday() {
+        String today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+        String sql = "SELECT payment_method, amount_paid FROM payments WHERE date(payment_time) = ?";
 
-            for (Ticket t : tickets) {
-                String time = t.getEntryTime().format(
-                        java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-                sb.append(String.format(" %-14s | %-6s | %s\n",
-                        t.getLicensePlate(), t.getSpotId(), time));
+        try (Connection conn = DatabaseConnection.connect();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            pstmt.setString(1, today);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                System.out.println("\n=== DEBUG: Payments today ===");
+                boolean hasPayments = false;
+                while (rs.next()) {
+                    hasPayments = true;
+                    System.out.println("  " + rs.getString("payment_method") +
+                            ": RM " + rs.getDouble("amount_paid"));
+                }
+                if (!hasPayments) {
+                    System.out.println("  No payments today");
+                }
+                System.out.println("===========================\n");
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "Error debugging payments", e);
+        }
+    }
+
+    private void refreshCurrentVehicles() {
+        String sql = "SELECT * FROM tickets";
+        StringBuilder sb = new StringBuilder();
+        sb.append(" LICENSE PLATE | SPOT   | ENTRY TIME\n");
+        sb.append("----------------------------------------\n");
+
+        try (Connection conn = DatabaseConnection.connect();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            boolean hasVehicles = false;
+            while (rs.next()) {
+                hasVehicles = true;
+                String plate = rs.getString("license_plate");
+                String spotId = rs.getString("spot_id");
+                String entryTime = rs.getString("entry_time");
+
+                // Format time to show only time part
+                if (entryTime != null && entryTime.length() > 11) {
+                    entryTime = entryTime.substring(11, 19);
+                }
+
+                sb.append(String.format(" %-14s | %-6s | %s\n", plate, spotId, entryTime));
             }
 
-            if (tickets.isEmpty()) {
+            if (!hasVehicles) {
                 sb.append("\n No vehicles currently parked.");
             }
 
             currentVehiclesArea.setText(sb.toString());
 
         } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "Error refreshing vehicles", e);
             currentVehiclesArea.setText("Error loading vehicles: " + e.getMessage());
         }
     }
 
     private void refreshUnpaidFines() {
-        try {
-            StringBuilder sb = new StringBuilder();
-            sb.append(" LICENSE PLATE | FINE AMOUNT\n");
-            sb.append("--------------------------------\n");
+        StringBuilder sb = new StringBuilder();
 
-            String sql = "SELECT license_plate, SUM(fine_amount) as total FROM fines WHERE is_paid = 0 GROUP BY license_plate";
-            try (Connection conn = DatabaseConnection.connect();
-                 Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(sql)) {
+        String sql = "SELECT license_plate, fine_type, fine_amount, paid_amount, " +
+                "(fine_amount - paid_amount) as outstanding, overstay_minutes, calculation_method " +
+                "FROM fines WHERE is_paid = 0 " +
+                "ORDER BY license_plate, created_date";
 
-                double totalOutstanding = 0;
-                while (rs.next()) {
-                    double amount = rs.getDouble("total");
-                    totalOutstanding += amount;
-                    sb.append(String.format(" %-14s | RM %.2f\n",
-                            rs.getString("license_plate"), amount));
+        try (Connection conn = DatabaseConnection.connect();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            double totalOverstay = 0;
+            double totalReservation = 0;
+            double totalUnpaid = 0;
+            double totalOutstanding = 0;
+
+            sb.append(" LICENSE PLATE | FINE TYPE          | TOTAL  | PAID  | OUTSTANDING | DETAILS\n");
+            sb.append("--------------------------------------------------------------------------------\n");
+
+            boolean hasFines = false;
+            while (rs.next()) {
+                hasFines = true;
+                String plate = rs.getString("license_plate");
+                String fineType = rs.getString("fine_type");
+                double fineAmount = rs.getDouble("fine_amount");
+                double paidAmount = rs.getDouble("paid_amount");
+                double outstanding = rs.getDouble("outstanding");
+                long overstayMins = rs.getLong("overstay_minutes");
+                String method = rs.getString("calculation_method");
+
+                totalOutstanding += outstanding;
+
+                // Add to category totals
+                switch (fineType) {
+                    case "OVERSTAY":
+                        totalOverstay += outstanding;
+                        break;
+                    case "RESERVATION_MISUSE":
+                        totalReservation += outstanding;
+                        break;
+                    case "UNPAID_FEE":
+                        totalUnpaid += outstanding;
+                        break;
+                    default:
+                        break;
                 }
 
-                sb.append("\n");
-                sb.append(String.format(" TOTAL OUTSTANDING: RM %.2f", totalOutstanding));
-
-                if (totalOutstanding == 0) {
-                    sb.append("\n No unpaid fines.");
+                // Format fine type for display
+                String displayType;
+                String details;
+                switch (fineType) {
+                    case "OVERSTAY":
+                        displayType = "Overstay";
+                        details = overstayMins + " mins, " + (method != null ? method : "Fixed");
+                        break;
+                    case "RESERVATION_MISUSE":
+                        displayType = "Reservation Misuse";
+                        details = "RM50 fine";
+                        break;
+                    case "UNPAID_FEE":
+                        displayType = "Unpaid Balance";
+                        details = "Previous parking fee";
+                        break;
+                    default:
+                        displayType = fineType;
+                        details = "";
                 }
+
+                sb.append(String.format(" %-14s | %-18s | RM %-6.2f| RM %-5.2f| RM %-9.2f| %s\n",
+                        plate, displayType, fineAmount, paidAmount, outstanding, details));
             }
+
+            if (!hasFines) {
+                sb.append("\n No unpaid fines found.\n\n");
+            }
+
+            sb.append("\n");
+            sb.append("-".repeat(80)).append("\n");
+            sb.append("SUMMARY BY FINE TYPE:\n");
+            sb.append(String.format("  Overstay Fines:          RM %.2f\n", totalOverstay));
+            sb.append(String.format("  Reservation Misuse Fines: RM %.2f\n", totalReservation));
+            sb.append(String.format("  Unpaid Balance Fines:    RM %.2f\n", totalUnpaid));
+            sb.append("-".repeat(80)).append("\n");
+            sb.append(String.format("  TOTAL OUTSTANDING:       RM %.2f\n", totalOutstanding));
 
             unpaidFinesArea.setText(sb.toString());
 
-        } catch (Exception e) {
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "Error refreshing unpaid fines", e);
             unpaidFinesArea.setText("Error loading fines: " + e.getMessage());
         }
     }
