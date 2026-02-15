@@ -124,7 +124,7 @@ public class EntryPanel extends JPanel {
     }
 
     private void refreshAvailableSpots() {
-        String licensePlate = licensePlateField.getText().trim();
+        String licensePlate = licensePlateField.getText().trim().toUpperCase();
         if (licensePlate.isEmpty()) {
             JOptionPane.showMessageDialog(this,
                     "Please enter license plate number",
@@ -142,14 +142,8 @@ public class EntryPanel extends JPanel {
             case "MOTORCYCLE": vehicle = new Motorcycle(licensePlate); break;
             case "SUV": vehicle = new SUV(licensePlate); break;
             case "HANDICAPPED":
-                if (!hasCard) {
-                    JOptionPane.showMessageDialog(this,
-                            "Handicapped vehicles MUST have a handicapped card!",
-                            "Validation Error",
-                            JOptionPane.ERROR_MESSAGE);
-                    return;
-                }
-                vehicle = new HandicappedVehicle(licensePlate, true);
+                // Create the vehicle regardless of the card status --AZ
+                vehicle = new HandicappedVehicle(licensePlate, hasCard);
                 break;
             default: vehicle = null;
         }
@@ -157,15 +151,21 @@ public class EntryPanel extends JPanel {
         List<ParkingSpot> availableSpots = facade.getAvailableSpotsForVehicle(vehicle);
         spotListModel.clear();
 
+        // Inside your loop in refreshAvailableSpots
         for (ParkingSpot spot : availableSpots) {
-            if (vehicle instanceof HandicappedVehicle) {
-                if (spot.getType().equalsIgnoreCase("Handicapped")) {
-                    spotListModel.addElement("★ " + spot.toString() + " (PRIORITY)");
+            if (vehicle instanceof HandicappedVehicle hv) {
+                hasCard = hv.hasHandicappedCard();
+
+                if (hasCard && spot.getType().equalsIgnoreCase("Handicapped")) {
+                    spotListModel.addElement("★ " + spot.getSpotId() + " - " + spot.getType() + " (FREE)");
+                } else if (hasCard) {
+                    // This ensures a RM 5 spot shows as RM 2 in the list for card holders
+                    spotListModel.addElement(spot.getSpotId() + " - " + spot.getType() + " (RM 2.00/hr)");
                 } else {
-                    spotListModel.addElement(spot.toString() + " (alternative)");
+                    spotListModel.addElement(spot.getSpotId() + " - " + spot.getType() + " (RM " + spot.getHourlyRate() + "/hr)");
                 }
             } else {
-                spotListModel.addElement(spot.toString());
+                spotListModel.addElement(spot.getSpotId() + " - " + spot.getType() + " (RM " + spot.getHourlyRate() + "/hr)");
             }
         }
 
@@ -183,9 +183,15 @@ public class EntryPanel extends JPanel {
             String selectedSpotStr = availableSpotsList.getSelectedValue();
             if (selectedSpotStr == null) return;
 
+            // Fix: Remove any special characters and extract just the spot ID
             String spotId = selectedSpotStr.split(" - ")[0];
+            // Remove the ★ if present
+            spotId = spotId.replace("★ ", "").trim();
 
-            String licensePlate = licensePlateField.getText().trim();
+            System.out.println("Selected spot string: " + selectedSpotStr);
+            System.out.println("Extracted spotId: " + spotId); // Debug
+
+            String licensePlate = licensePlateField.getText().trim().toUpperCase();
             String vehicleType = (String) vehicleTypeCombo.getSelectedItem();
             boolean hasCard = handicappedCardCheck.isSelected();
 
@@ -194,6 +200,7 @@ public class EntryPanel extends JPanel {
             Ticket ticket = facade.findActiveTicket(licensePlate);
             ticketDisplayArea.setText(ticket.toString());
 
+            // Clear form
             licensePlateField.setText("");
             vehicleTypeCombo.setSelectedIndex(0);
             handicappedCardCheck.setSelected(false);
